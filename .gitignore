@@ -1,0 +1,27 @@
+# Virtual environment
+venv/
+
+# Environment variables (contains secrets)
+.env
+
+# LinkedIn cookies (contains session tokens)
+linkedin_cookies.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Debug scripts
+debug_search.py
