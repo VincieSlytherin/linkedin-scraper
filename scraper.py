@@ -82,13 +82,14 @@ def classify_company_size(staff_count: Optional[int]) -> str:
 class LinkedInScraper:
     """Wraps the unofficial linkedin-api library for job searching."""
 
-    REQUEST_DELAY = 2.0          # seconds between API calls
+    REQUEST_DELAY = 4.0          # seconds between API calls
     MAX_RETRIES = 3
     BACKOFF_BASE = 5             # seconds; doubles each retry
 
     COOKIE_FILE = "linkedin_cookies.json"
 
-    def __init__(self, email: str, password: str) -> None:
+    def __init__(self, email: str, password: str, db=None) -> None:
+        self._db = db  # Optional JobDatabase for caching
         import json
         from pathlib import Path
         from requests.cookies import cookiejar_from_dict
@@ -105,6 +106,8 @@ class LinkedInScraper:
                 self._api = Linkedin(email, password, cookies=cookie_jar)
                 logger.info("Authenticated with saved cookies")
                 self._last_request_time: float = 0.0
+                self._consecutive_failures: int = 0
+                self._adaptive_delay: float = 0.0
                 return
             except Exception as exc:
                 logger.warning("Saved cookies failed (%s), trying fresh login...", exc)
@@ -138,26 +141,49 @@ class LinkedInScraper:
             logger.debug("Could not save cookies (non-critical)")
 
         self._last_request_time = 0.0
+        self._consecutive_failures: int = 0
+        self._adaptive_delay: float = 0.0
 
     # -- rate limiting --------------------------------------------------
 
     def _rate_limit(self) -> None:
+        """Sleep to respect rate limits, with adaptive delay on failures."""
+        total_delay = self.REQUEST_DELAY + self._adaptive_delay
         elapsed = time.time() - self._last_request_time
-        if elapsed < self.REQUEST_DELAY:
-            time.sleep(self.REQUEST_DELAY - elapsed)
+        if elapsed < total_delay:
+            time.sleep(total_delay - elapsed)
         self._last_request_time = time.time()
 
     def _call_with_retry(self, fn, *args, **kwargs):
-        """Call *fn* with retries and exponential backoff."""
+        """Call *fn* with retries, exponential backoff, and adaptive rate limiting."""
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
                 self._rate_limit()
-                return fn(*args, **kwargs)
+                result = fn(*args, **kwargs)
+                # Success: gradually reduce adaptive delay
+                if self._adaptive_delay > 0:
+                    self._adaptive_delay = max(0, self._adaptive_delay - 1.0)
+                self._consecutive_failures = 0
+                return result
             except Exception as exc:
+                self._consecutive_failures += 1
+                # Increase adaptive delay on each failure (capped at 30s extra)
+                self._adaptive_delay = min(30.0, self._adaptive_delay + 3.0)
                 wait = self.BACKOFF_BASE * (2 ** (attempt - 1))
+                # After 3+ consecutive failures across calls, add a long cooldown
+                if self._consecutive_failures >= 3:
+                    cooldown = 60
+                    logger.warning(
+                        "%d consecutive failures — cooling down for %ds",
+                        self._consecutive_failures, cooldown,
+                    )
+                    time.sleep(cooldown)
+                    self._consecutive_failures = 0
                 logger.warning(
-                    "API call %s failed (attempt %d/%d): %s  — retrying in %ds",
+                    "API call %s failed (attempt %d/%d): %s — retrying in %ds "
+                    "(adaptive delay now %.1fs)",
                     fn.__name__, attempt, self.MAX_RETRIES, exc, wait,
+                    self._adaptive_delay,
                 )
                 if attempt == self.MAX_RETRIES:
                     raise LinkedInScraperError(
@@ -214,25 +240,41 @@ class LinkedInScraper:
     def fetch_full_listings(
         self, raw_results: list[dict], max_jobs: int = 50
     ) -> list[JobListing]:
-        """Fetch detailed info for each raw search result."""
+        """Fetch detailed info for each raw search result, using cache when available."""
         listings: list[JobListing] = []
+        cache_hits = 0
+        total = min(max_jobs, len(raw_results))
+
         for raw in raw_results[:max_jobs]:
             job_id = self._extract_job_id(raw)
             if not job_id:
                 continue
+
+            # Check cache first
+            if self._db is not None:
+                cached = self._db.get_job(job_id)
+                if cached is not None:
+                    listings.append(cached)
+                    cache_hits += 1
+                    logger.info(
+                        "Cache hit [%d/%d] %s @ %s",
+                        len(listings), total, cached.title, cached.company.name,
+                    )
+                    continue
+
+            # Not in cache — fetch from API
             try:
                 detail = self._call_with_retry(self._api.get_job, job_id)
             except LinkedInScraperError:
                 logger.warning("Skipping job %s — could not fetch details", job_id)
+                time.sleep(10)
                 continue
 
             if not detail:
                 continue
 
-            # Build company info
             company_info = self._build_company_info(detail)
 
-            # Build job listing
             description = (
                 detail.get("description", {}).get("text", "")
                 if isinstance(detail.get("description"), dict)
@@ -252,10 +294,20 @@ class LinkedInScraper:
                 raw_data=detail,
             )
             listings.append(listing)
+
+            # Save to cache
+            if self._db is not None:
+                self._db.save_job(listing)
+
             logger.info(
                 "Fetched [%d/%d] %s @ %s",
-                len(listings), min(max_jobs, len(raw_results)),
-                listing.title, listing.company.name,
+                len(listings), total, listing.title, listing.company.name,
+            )
+
+        if cache_hits > 0:
+            logger.info(
+                "Used %d cached jobs, fetched %d from API",
+                cache_hits, len(listings) - cache_hits,
             )
         return listings
 
@@ -283,8 +335,24 @@ class LinkedInScraper:
         if staff_count is None and company_urn:
             public_id = self._extract_company_public_id(company_urn)
             if public_id:
-                try:
-                    company_profile = self._call_with_retry(self._api.get_company, public_id)
+                # Check company cache first
+                company_profile = None
+                if self._db is not None:
+                    company_profile = self._db.get_company(public_id)
+                    if company_profile:
+                        logger.debug("Company cache hit for %s", public_id)
+
+                if company_profile is None:
+                    try:
+                        company_profile = self._call_with_retry(
+                            self._api.get_company, public_id,
+                        )
+                        if self._db is not None and company_profile:
+                            self._db.save_company(public_id, company_profile)
+                    except LinkedInScraperError:
+                        logger.debug("Could not fetch company profile for %s", company_urn)
+
+                if company_profile:
                     staff_count = (
                         company_profile.get("staffCount")
                         or company_profile.get("staffCountRange", {}).get("start")
@@ -293,8 +361,6 @@ class LinkedInScraper:
                         company_name = company_profile.get("name", company_name)
                     if not company_url:
                         company_url = company_profile.get("companyPageUrl", "")
-                except LinkedInScraperError:
-                    logger.debug("Could not fetch company profile for %s", company_urn)
 
         size_category = classify_company_size(staff_count)
         return CompanyInfo(

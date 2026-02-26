@@ -23,5 +23,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Job cache database
+job_cache.db
+
 # Debug scripts
 debug_search.py

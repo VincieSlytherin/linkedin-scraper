@@ -171,9 +171,10 @@ class JobAnalyzer:
 
     ANALYSIS_BATCH_SIZE = 10
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514", db=None) -> None:
         self.client = Anthropic(api_key=api_key)
         self.model = model
+        self._db = db  # Optional JobDatabase for caching
 
     # -- search parameter generation ------------------------------------
 
@@ -242,16 +243,44 @@ class JobAnalyzer:
     ) -> list[tuple[JobListing, JobAnalysis]]:
         """Analyze, filter, and rank job listings."""
         all_analyses: list[tuple[JobListing, JobAnalysis]] = []
+        jobs_to_analyze: list[JobListing] = []
 
-        # Process in batches
-        for i in range(0, len(jobs), self.ANALYSIS_BATCH_SIZE):
-            batch = jobs[i : i + self.ANALYSIS_BATCH_SIZE]
+        # Check cache for each job
+        for job in jobs:
+            if self._db is not None:
+                cached = self._db.get_analysis(
+                    job.job_id,
+                    preferences.natural_language_query,
+                    preferences.preferred_company_sizes,
+                )
+                if cached is not None:
+                    all_analyses.append((job, cached))
+                    continue
+            jobs_to_analyze.append(job)
+
+        if all_analyses:
             logger.info(
-                "Analyzing batch %d–%d of %d jobs",
-                i + 1, min(i + self.ANALYSIS_BATCH_SIZE, len(jobs)), len(jobs),
+                "Loaded %d cached analyses, %d jobs need fresh analysis",
+                len(all_analyses), len(jobs_to_analyze),
+            )
+
+        # Analyze uncached jobs in batches
+        for i in range(0, len(jobs_to_analyze), self.ANALYSIS_BATCH_SIZE):
+            batch = jobs_to_analyze[i : i + self.ANALYSIS_BATCH_SIZE]
+            logger.info(
+                "Analyzing batch %d–%d of %d uncached jobs",
+                i + 1, min(i + self.ANALYSIS_BATCH_SIZE, len(jobs_to_analyze)),
+                len(jobs_to_analyze),
             )
             try:
                 analyses = self._analyze_batch(batch, preferences)
+                for _job, analysis in analyses:
+                    if self._db is not None:
+                        self._db.save_analysis(
+                            analysis,
+                            preferences.natural_language_query,
+                            preferences.preferred_company_sizes,
+                        )
                 all_analyses.extend(analyses)
             except JobAnalysisError as exc:
                 logger.warning("Batch analysis failed: %s — skipping batch", exc)

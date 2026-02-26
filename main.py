@@ -5,6 +5,7 @@ import sys
 
 from analyzer import JobAnalyzer, UserPreferences, AnalyzerError
 from config import load_config
+from database import JobDatabase
 from emailer import EmailSender
 from scraper import LinkedInScraper, LinkedInScraperError
 
@@ -90,12 +91,17 @@ def main() -> None:
     # 1. Load config
     config = load_config()
 
+    # 1b. Initialize database cache
+    db = JobDatabase()
+    db.cleanup_expired()
+    logger.info("Job cache initialized (%s)", db.db_path)
+
     # 2. Collect user input
     preferences = get_user_input()
 
     # 3. Generate search params with Claude
     logger.info("Generating search parameters with Claude...")
-    analyzer = JobAnalyzer(api_key=config.anthropic_api_key, model=config.claude_model)
+    analyzer = JobAnalyzer(api_key=config.anthropic_api_key, model=config.claude_model, db=db)
     try:
         search_params = analyzer.generate_search_params(preferences.natural_language_query)
         logger.info(
@@ -112,6 +118,7 @@ def main() -> None:
         scraper = LinkedInScraper(
             email=config.linkedin_email,
             password=config.linkedin_password,
+            db=db,
         )
     except LinkedInScraperError as exc:
         logger.error("LinkedIn authentication failed: %s", exc)
@@ -172,6 +179,9 @@ def main() -> None:
 
     # 8. Terminal summary
     print_summary(top_results)
+
+    # 9. Close database
+    db.close()
 
 
 if __name__ == "__main__":
