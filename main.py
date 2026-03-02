@@ -158,8 +158,21 @@ def main() -> None:
         logger.warning("No jobs matched your preferences after analysis.")
         sys.exit(0)
 
+    # Filter out jobs already sent in previous runs
+    sent_ids = db.get_sent_job_ids()
+    new_results = [(job, analysis) for job, analysis in results if job.job_id not in sent_ids]
+    if len(new_results) < len(results):
+        logger.info(
+            "Filtered out %d previously sent jobs, %d new jobs remaining",
+            len(results) - len(new_results), len(new_results),
+        )
+
+    if not new_results:
+        logger.warning("All matching jobs were already sent in previous runs.")
+        sys.exit(0)
+
     # Limit to top N for email
-    top_results = results[: config.max_jobs_to_email]
+    top_results = new_results[: config.max_jobs_to_email]
 
     # 7. Email results
     logger.info("Sending top %d results to %s...", len(top_results), config.gmail_recipient)
@@ -174,6 +187,7 @@ def main() -> None:
     )
     if email_sent:
         logger.info("Email sent successfully!")
+        db.mark_jobs_sent([job.job_id for job, _ in top_results])
     else:
         logger.warning("Failed to send email. See results below.")
 

@@ -63,6 +63,11 @@ class JobDatabase:
                 fetched_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS sent_jobs (
+                job_id TEXT PRIMARY KEY,
+                sent_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS analyses (
                 job_id TEXT,
                 query_hash TEXT NOT NULL,
@@ -218,6 +223,22 @@ class JobDatabase:
                 json.dumps(analysis.pros), json.dumps(analysis.cons),
                 analysis.recommendation, time.time(),
             ),
+        )
+        self._conn.commit()
+
+    # -- Sent jobs tracking ------------------------------------------------
+
+    def get_sent_job_ids(self) -> set[str]:
+        """Return job IDs that have already been emailed to the user."""
+        rows = self._conn.execute("SELECT job_id FROM sent_jobs").fetchall()
+        return {row["job_id"] for row in rows}
+
+    def mark_jobs_sent(self, job_ids: list[str]) -> None:
+        """Record that these jobs have been emailed."""
+        now = time.time()
+        self._conn.executemany(
+            "INSERT OR IGNORE INTO sent_jobs (job_id, sent_at) VALUES (?, ?)",
+            [(jid, now) for jid in job_ids],
         )
         self._conn.commit()
 
