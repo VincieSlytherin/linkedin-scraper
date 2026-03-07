@@ -7,6 +7,7 @@ from analyzer import JobAnalyzer, UserPreferences, AnalyzerError
 from config import load_config
 from database import JobDatabase
 from emailer import EmailSender
+from resume_parser import parse_resume, SUPPORTED_EXTENSIONS
 from scraper import LinkedInScraper, LinkedInScraperError
 
 
@@ -84,6 +85,25 @@ def print_summary(results: list[tuple]) -> None:
     print("\n" + "=" * 60)
 
 
+def _load_resume_profile(db: JobDatabase, analyzer: JobAnalyzer, logger: logging.Logger) -> None:
+    """If a resume is stored in DB without an extracted profile, generate it now."""
+    resume = db.get_latest_resume()
+    if resume is None:
+        logger.info("No resume found in database. Using default candidate profile.")
+        logger.info("  → Upload your resume via the dashboard: streamlit run dashboard.py")
+        return
+    if resume["extracted_profile"]:
+        analyzer.candidate_profile = resume["extracted_profile"]
+        logger.info("Loaded candidate profile from resume: %s", resume["filename"])
+        return
+    # Profile not yet extracted — generate it now
+    logger.info("Extracting profile from resume '%s' with Claude...", resume["filename"])
+    profile = analyzer.extract_profile_from_resume(resume["raw_text"])
+    db.update_resume_profile(resume["id"], profile)
+    analyzer.candidate_profile = profile
+    logger.info("Profile extracted and cached.")
+
+
 def main() -> None:
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -96,12 +116,16 @@ def main() -> None:
     db.cleanup_expired()
     logger.info("Job cache initialized (%s)", db.db_path)
 
+    # 3. Generate search params with Claude (analyzer init needed before resume load)
+    analyzer = JobAnalyzer(api_key=config.anthropic_api_key, model=config.claude_model, db=db)
+
+    # 1c. Load resume-based candidate profile (replaces hardcoded profile if resume exists)
+    _load_resume_profile(db, analyzer, logger)
+
     # 2. Collect user input
     preferences = get_user_input()
 
-    # 3. Generate search params with Claude
     logger.info("Generating search parameters with Claude...")
-    analyzer = JobAnalyzer(api_key=config.anthropic_api_key, model=config.claude_model, db=db)
     try:
         search_params = analyzer.generate_search_params(preferences.natural_language_query)
         logger.info(

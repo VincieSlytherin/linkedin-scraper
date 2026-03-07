@@ -81,6 +81,22 @@ class JobDatabase:
                 analyzed_at REAL NOT NULL,
                 PRIMARY KEY (job_id, query_hash)
             );
+
+            CREATE TABLE IF NOT EXISTS resumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                raw_text TEXT NOT NULL,
+                extracted_profile TEXT,
+                uploaded_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS applications (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'recommended',
+                applied_at REAL,
+                notes TEXT,
+                updated_at REAL NOT NULL
+            );
         """)
 
     def close(self) -> None:
@@ -241,6 +257,112 @@ class JobDatabase:
             [(jid, now) for jid in job_ids],
         )
         self._conn.commit()
+
+    # -- Resume management -------------------------------------------------
+
+    def save_resume(self, filename: str, raw_text: str, extracted_profile: str | None = None) -> int:
+        """Save a resume and return its row id."""
+        cur = self._conn.execute(
+            """INSERT INTO resumes (filename, raw_text, extracted_profile, uploaded_at)
+               VALUES (?, ?, ?, ?)""",
+            (filename, raw_text, extracted_profile, time.time()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_latest_resume(self) -> dict | None:
+        """Return the most recently uploaded resume, or None."""
+        row = self._conn.execute(
+            "SELECT * FROM resumes ORDER BY uploaded_at DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def update_resume_profile(self, resume_id: int, extracted_profile: str) -> None:
+        """Store the Claude-generated profile summary for an uploaded resume."""
+        self._conn.execute(
+            "UPDATE resumes SET extracted_profile = ? WHERE id = ?",
+            (extracted_profile, resume_id),
+        )
+        self._conn.commit()
+
+    # -- Application tracking ----------------------------------------------
+
+    APPLICATION_STATUSES = [
+        "recommended",
+        "applied",
+        "phone_screen",
+        "interview",
+        "offer",
+        "rejected",
+        "withdrawn",
+        "not_interested",
+    ]
+
+    def upsert_application(
+        self,
+        job_id: str,
+        status: str,
+        notes: str | None = None,
+        applied_at: float | None = None,
+    ) -> None:
+        """Insert or update an application record."""
+        now = time.time()
+        if applied_at is None and status == "applied":
+            existing = self._conn.execute(
+                "SELECT applied_at FROM applications WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            applied_at = existing["applied_at"] if existing and existing["applied_at"] else now
+
+        self._conn.execute(
+            """INSERT INTO applications (job_id, status, applied_at, notes, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(job_id) DO UPDATE SET
+                   status     = excluded.status,
+                   applied_at = COALESCE(excluded.applied_at, applications.applied_at),
+                   notes      = excluded.notes,
+                   updated_at = excluded.updated_at""",
+            (job_id, status, applied_at, notes, now),
+        )
+        self._conn.commit()
+
+    def get_dashboard_jobs(self) -> list[dict]:
+        """All recommended jobs joined with best analysis score + application status."""
+        rows = self._conn.execute("""
+            SELECT
+                j.job_id,
+                j.title,
+                j.company_name,
+                j.company_size_category,
+                j.location,
+                j.url,
+                j.remote_allowed,
+                s.sent_at,
+                best.relevance_score,
+                best.recommendation,
+                best.skills_match,
+                best.skills_gap,
+                best.relevance_explanation,
+                COALESCE(app.status, 'recommended') AS status,
+                app.applied_at,
+                app.notes,
+                app.updated_at
+            FROM sent_jobs s
+            JOIN jobs j ON s.job_id = j.job_id
+            LEFT JOIN (
+                SELECT a.job_id, a.relevance_score, a.recommendation,
+                       a.skills_match, a.skills_gap, a.relevance_explanation
+                FROM analyses a
+                INNER JOIN (
+                    SELECT job_id, MAX(relevance_score) AS max_score
+                    FROM analyses GROUP BY job_id
+                ) m ON a.job_id = m.job_id AND a.relevance_score = m.max_score
+            ) best ON j.job_id = best.job_id
+            LEFT JOIN applications app ON j.job_id = app.job_id
+            ORDER BY COALESCE(best.relevance_score, 0) DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
 
     # -- Maintenance -------------------------------------------------------
 

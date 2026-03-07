@@ -227,10 +227,41 @@ class JobAnalyzer:
 
     ANALYSIS_BATCH_SIZE = 10
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514", db=None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-20250514",
+        db=None,
+        candidate_profile: str | None = None,
+    ) -> None:
         self.client = Anthropic(api_key=api_key)
         self.model = model
-        self._db = db  # Optional JobDatabase for caching
+        self._db = db
+        # Use provided resume-based profile, fall back to hardcoded one
+        self.candidate_profile = candidate_profile or CANDIDATE_PROFILE
+
+    # -- resume profile extraction --------------------------------------
+
+    def extract_profile_from_resume(self, resume_text: str) -> str:
+        """Use Claude to extract a structured candidate profile from resume text."""
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=2048,
+            system=(
+                "You are an expert resume analyst. Extract a structured candidate profile "
+                "from the resume below. Format it as concise markdown covering:\n"
+                "- Current role/level and years of experience\n"
+                "- Core technical skills (be specific: frameworks, tools, languages)\n"
+                "- Domain expertise and industry experience\n"
+                "- Education\n"
+                "- What types of roles they are best suited for\n"
+                "- What does NOT fit (role types, seniority levels, tech stacks to avoid)\n"
+                "- Any important job-search constraints (visa, location, etc.)\n\n"
+                "Be specific and factual. Output ONLY the profile markdown, no preamble."
+            ),
+            messages=[{"role": "user", "content": resume_text}],
+        )
+        return response.content[0].text.strip()
 
     # -- search parameter generation ------------------------------------
 
@@ -383,7 +414,7 @@ class JobAnalyzer:
             })
 
         system = ANALYSIS_SYSTEM_PROMPT.format(
-            candidate_profile=CANDIDATE_PROFILE,
+            candidate_profile=self.candidate_profile,
             query=preferences.natural_language_query,
             sizes=", ".join(preferences.preferred_company_sizes),
         )
