@@ -5,9 +5,8 @@ Run with: streamlit run dashboard.py
 from __future__ import annotations
 
 import json
-import time
+import re
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -69,11 +68,208 @@ STATUS_COLOR = {
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_jobs, tab_resume, tab_stats = st.tabs(["💼 Jobs", "📄 Resume", "📊 Stats"])
+tab_search, tab_jobs, tab_resume, tab_stats = st.tabs(["🔍 Search", "💼 Jobs", "📄 Resume", "📊 Stats"])
 
 
 # ===========================================================================
-# TAB 1 — JOBS
+# TAB 1 — SEARCH
+# ===========================================================================
+
+with tab_search:
+    st.header("Search New Jobs")
+
+    with st.form("search_form"):
+        col_left, col_right = st.columns(2)
+        with col_left:
+            titles_input = st.text_area(
+                "Job titles / roles (one per line)",
+                placeholder="Senior AI Engineer\nML Engineer\nApplied AI Engineer",
+                height=120,
+            )
+        with col_right:
+            locations_input = st.text_area(
+                "Locations (one per line)",
+                placeholder="San Francisco, CA\nNew York, NY\nUnited States",
+                height=120,
+            )
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            size_filter = st.multiselect(
+                "Company sizes",
+                options=["startup", "small", "medium", "large", "enterprise"],
+                default=["startup", "small", "medium", "large", "enterprise"],
+            )
+        with col_s2:
+            min_score = st.slider("Min relevance score", 0.0, 1.0, 0.6, 0.05)
+        with col_s3:
+            max_jobs_per_search = st.number_input(
+                "Max jobs per search", min_value=5, max_value=50, value=15, step=5,
+                help="Jobs fetched per title × location combination"
+            )
+
+        submitted = st.form_submit_button("Search & Analyze", type="primary", use_container_width=True)
+
+    # Parse inputs
+    titles = [t.strip() for t in titles_input.splitlines() if t.strip()] if submitted else []
+    locations = [l.strip() for l in locations_input.splitlines() if l.strip()] if submitted else []
+    if submitted and not locations:
+        locations = ["United States"]
+
+    if submitted and titles:
+        try:
+            from config import load_config
+            cfg = load_config()
+        except SystemExit:
+            st.error("Missing credentials in `.env`. Fill in LINKEDIN_EMAIL, LINKEDIN_PASSWORD, ANTHROPIC_API_KEY, and Gmail settings.")
+            st.stop()
+
+        from analyzer import JobAnalyzer, UserPreferences
+        from scraper import LinkedInScraper, LinkedInScraperError
+
+        total_combinations = len(titles) * len(locations)
+
+        with st.status(
+            f"Searching {total_combinations} combination(s): {len(titles)} title(s) × {len(locations)} location(s)",
+            expanded=True,
+        ) as status:
+            # Step 1 — Build analyzer and load resume profile
+            st.write("Loading candidate profile...")
+            analyzer = JobAnalyzer(api_key=cfg.anthropic_api_key, model=cfg.claude_model, db=db)
+            resume = db.get_latest_resume()
+            if resume and resume.get("extracted_profile"):
+                analyzer.candidate_profile = resume["extracted_profile"]
+
+            # Step 2 — Authenticate with LinkedIn
+            st.write("Authenticating with LinkedIn...")
+            try:
+                scraper = LinkedInScraper(
+                    email=cfg.linkedin_email,
+                    password=cfg.linkedin_password,
+                    db=db,
+                )
+            except LinkedInScraperError as exc:
+                status.update(label="Authentication failed", state="error")
+                st.error(f"LinkedIn authentication failed: {exc}")
+                st.stop()
+
+            # Step 3 — Search each title × location combination
+            combined_raw: dict[str, dict] = {}  # job_id → raw result (deduplicated)
+            primary_query = titles[0]  # used for analysis context
+
+            for title in titles:
+                for location in locations:
+                    combo_query = f"{title} in {location}"
+                    st.write(f"Searching: **{title}** in **{location}**...")
+                    try:
+                        search_params = analyzer.generate_search_params(combo_query)
+                        st.caption(f"  Keywords: {search_params.keywords} | Location: {search_params.location_name}")
+                        raw = scraper.search_jobs(search_params)
+                        new_count = 0
+                        for r in raw:
+                            urn = r.get("dashEntityUrn", "") or r.get("entityUrn", "")
+                            m = re.search(r"(\d{5,})", urn)
+                            jid = m.group(1) if m else None
+                            if jid and jid not in combined_raw:
+                                combined_raw[jid] = r
+                                new_count += 1
+                        st.caption(f"  +{new_count} new results ({len(combined_raw)} unique total)")
+                    except Exception as exc:
+                        st.warning(f"  Search failed for '{title}' in '{location}': {exc}")
+
+            if not combined_raw:
+                status.update(label="No results found", state="error")
+                st.warning("No jobs found across all searches. Try broader titles or locations.")
+                st.stop()
+
+            st.write(f"Total unique raw results: **{len(combined_raw)}**")
+
+            # Step 4 — Fetch details
+            max_jobs = int(max_jobs_per_search) * total_combinations
+            st.write(f"Fetching full job details (up to {max_jobs} jobs, rate-limited — this may take a few minutes)...")
+            try:
+                all_raw_list = list(combined_raw.values())
+                jobs = scraper.fetch_full_listings(all_raw_list, max_jobs=max_jobs)
+                st.write(f"Fetched **{len(jobs)}** job listings.")
+            except Exception as exc:
+                status.update(label="Fetch failed", state="error")
+                st.error(f"Failed to fetch job details: {exc}")
+                st.stop()
+
+            if not jobs:
+                status.update(label="No job details retrieved", state="error")
+                st.warning("Could not fetch details for any jobs.")
+                st.stop()
+
+            # Step 5 — Analyze
+            st.write("Analyzing jobs with Claude...")
+            prefs = UserPreferences(
+                natural_language_query=primary_query,
+                preferred_company_sizes=size_filter or ["startup", "small", "medium", "large", "enterprise"],
+                min_relevance_score=min_score,
+            )
+            try:
+                results = analyzer.analyze_jobs(jobs, prefs)
+                st.write(f"**{len(results)}** jobs passed the relevance filter (score ≥ {min_score:.0%}).")
+            except Exception as exc:
+                status.update(label="Analysis failed", state="error")
+                st.error(f"Analysis failed: {exc}")
+                st.stop()
+
+            # Step 6 — Deduplicate against already-sent jobs and save
+            sent_ids = db.get_sent_job_ids()
+            new_results = [(job, analysis) for job, analysis in results if job.job_id not in sent_ids]
+            skipped = len(results) - len(new_results)
+
+            if new_results:
+                db.mark_jobs_sent([job.job_id for job, _ in new_results])
+                st.write(f"Saved **{len(new_results)}** new jobs ({skipped} already seen previously).")
+            else:
+                st.write(f"All {len(results)} matching jobs were already recommended previously.")
+
+            status.update(label="Done!", state="complete", expanded=False)
+
+        if new_results:
+            st.success(f"Found {len(new_results)} new matching jobs across {total_combinations} search(es). Switch to the **Jobs** tab to view them.")
+            st.subheader("Top Results")
+            for i, (job, analysis) in enumerate(new_results[:10], 1):
+                score = analysis.relevance_score
+                bar = int(score * 20)
+                with st.expander(
+                    f"**{i}. {job.title}** @ {job.company.name}  ·  {score:.0%}  ·  {job.location}",
+                    expanded=(i <= 3),
+                ):
+                    st.markdown(
+                        f"`[{'█' * bar}{'░' * (20 - bar)}]` **{score:.0%}** · "
+                        f"{analysis.recommendation.replace('_', ' ').title()}"
+                    )
+                    st.caption(analysis.relevance_explanation)
+                    if analysis.skills_match:
+                        st.markdown(
+                            "**Match:** " + " ".join(
+                                f'<span style="background:#d1fae5;color:#065f46;'
+                                f'padding:2px 7px;border-radius:12px;font-size:0.8em">{s}</span>'
+                                for s in analysis.skills_match
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                    if analysis.skills_gap:
+                        st.markdown(
+                            "**Gap:** " + " ".join(
+                                f'<span style="background:#fee2e2;color:#991b1b;'
+                                f'padding:2px 7px;border-radius:12px;font-size:0.8em">{s}</span>'
+                                for s in analysis.skills_gap
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown(f"[View on LinkedIn ↗]({job.url})")
+        elif submitted:
+            st.info("No new jobs found matching your criteria.")
+    elif submitted:
+        st.warning("Please enter at least one job title.")
+
+
+# ===========================================================================
+# TAB 2 — JOBS
 # ===========================================================================
 
 with tab_jobs:
@@ -202,7 +398,7 @@ with tab_jobs:
 
 
 # ===========================================================================
-# TAB 2 — RESUME
+# TAB 3 — RESUME
 # ===========================================================================
 
 with tab_resume:
@@ -280,7 +476,7 @@ with tab_resume:
 
 
 # ===========================================================================
-# TAB 3 — STATS
+# TAB 4 — STATS
 # ===========================================================================
 
 with tab_stats:

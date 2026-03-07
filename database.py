@@ -26,7 +26,7 @@ class JobDatabase:
     ) -> None:
         self.db_path = db_path
         self.ttl_seconds = ttl_seconds
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -358,6 +358,7 @@ class JobDatabase:
                     SELECT job_id, MAX(relevance_score) AS max_score
                     FROM analyses GROUP BY job_id
                 ) m ON a.job_id = m.job_id AND a.relevance_score = m.max_score
+                GROUP BY a.job_id
             ) best ON j.job_id = best.job_id
             LEFT JOIN applications app ON j.job_id = app.job_id
             ORDER BY COALESCE(best.relevance_score, 0) DESC
