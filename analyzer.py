@@ -141,27 +141,83 @@ Bad: "(AI OR ML) AND (Senior OR Lead)".
 
 Call the create_linkedin_search tool with your extracted parameters."""
 
+CANDIDATE_PROFILE = """\
+## Candidate Background
+
+**Role**: AI Engineer (2+ years production experience)
+**Visa**: H1B holder, USA-based, open to relocation
+
+**Core strengths**:
+- Production RAG systems: multimodal ingestion, hybrid semantic search, metadata-first retrieval, \
+citation-grounded generation, hallucination mitigation. Deployed to 60+ enterprise users.
+- Agentic / multi-agent systems: LangChain, LangGraph, function-calling architectures, \
+LLM orchestration, structured execution graphs.
+- LLM reliability: reduced execution errors from ~30% to ~5% by redesigning pure LLM pipelines \
+into hybrid function-calling architectures.
+- Multimodal document intelligence: OCR + vision models, hierarchical Markdown reconstruction, \
+scanned document parsing.
+- Data engineering at scale: PySpark (billions of records), Polars lazy execution, Parquet, \
+zero-copy schema inspection, predicate pushdown.
+- ML: PyTorch, Transformers, Bayesian hyperparameter optimization, SHAP attribution, \
+attention-based NLP, MedLLAMA fine-tuning.
+
+**Infrastructure**: AWS (Bedrock), Databricks, Docker, Kubernetes, Terraform, MLflow, CI/CD
+
+**Model providers used**: Claude (Bedrock), ChatGPT, Gemini
+
+**Languages**: Python (primary), SQL, Java, C++, Bash
+
+**Domain experience**: Regulated financial / reinsurance environments (RGA), actuarial systems, \
+underwriting decision engines, compliance analysis
+
+**Education**: M.S. Computational Data Science, Carnegie Mellon University (GPA 3.85); \
+B.S. Data Science, Duke Kunshan University (GPA 3.86)
+
+**What fits well**:
+- Senior / mid-senior AI Engineer, Applied AI Engineer, ML Engineer roles
+- Companies building production AI systems, not just research
+- Roles requiring RAG, agentic workflows, LLM orchestration, or multimodal pipelines
+- Regulated industries (finance, insurance, healthcare, legal) are a strong fit
+- Roles requiring both engineering depth (latency, reliability, scale) and AI expertise
+
+**What does NOT fit**:
+- Pure data science / analytics roles with no AI/LLM component
+- Pure SWE roles with no ML/AI component
+- Research-only positions (no production deployment)
+- Junior roles
+- Roles requiring extensive hardware/chip-level ML (e.g., CUDA kernel engineering)
+"""
+
 ANALYSIS_SYSTEM_PROMPT = """\
-You are a job matching analyst. The user is looking for: "{query}"
+You are a precise job matching analyst evaluating roles for a specific candidate.
 
-Their preferred company sizes are: {sizes}
+{candidate_profile}
 
-Analyze each job listing below and return a JSON array of analysis objects.
-For each job, provide:
-- job_id: string — the job's ID
-- relevance_score: float 0.0–1.0
-- relevance_explanation: string — 1-2 sentences
-- skills_match: list[string] — matched skills
-- skills_gap: list[string] — required skills the user may lack
-- pros: list[string]
-- cons: list[string]
+The candidate is currently looking for: "{query}"
+Preferred company sizes: {sizes}
+
+Analyze each job listing and return a JSON array. For each job:
+- job_id: string
+- relevance_score: float 0.0–1.0 — score based on the candidate's ACTUAL background above, \
+not just keyword overlap. A role requiring skills the candidate clearly has should score high \
+even if the job description uses different terminology.
+- relevance_explanation: string — 1-2 sentences explaining the match quality against this \
+specific candidate's background
+- skills_match: list[string] — candidate's skills that directly match job requirements
+- skills_gap: list[string] — genuine gaps (skills the job requires that the candidate \
+demonstrably lacks — be conservative, do not list skills the candidate likely has)
+- pros: list[string] — concrete reasons this role suits this candidate
+- cons: list[string] — genuine concerns (visa requirements, seniority mismatch, domain mismatch, etc.)
 - recommendation: one of "strong_match", "good_match", "weak_match", "no_match"
 
 Scoring guide:
-  0.9–1.0  Almost perfect match
-  0.7–0.89 Good match, minor gaps
-  0.5–0.69 Partial match
-  <0.5     Weak / no match
+  0.9–1.0  Role maps directly onto candidate's core expertise (RAG, agentic, LLM eng, multimodal)
+  0.7–0.89 Good overlap with minor gaps or domain stretch
+  0.5–0.69 Partial match — relevant skills but significant gaps or role mismatch
+  <0.5     Weak match — different role type, seniority, or tech stack
+
+Be strict: a generic "Software Engineer" or "Data Analyst" role should score below 0.5 \
+even if it mentions AI. Reward roles that specifically value production AI systems experience.
 
 Return ONLY a valid JSON array. No markdown fences, no extra text."""
 
@@ -327,6 +383,7 @@ class JobAnalyzer:
             })
 
         system = ANALYSIS_SYSTEM_PROMPT.format(
+            candidate_profile=CANDIDATE_PROFILE,
             query=preferences.natural_language_query,
             sizes=", ".join(preferences.preferred_company_sizes),
         )
