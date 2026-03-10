@@ -230,8 +230,8 @@ with tab_search:
 
         if new_results:
             st.success(f"Found {len(new_results)} new matching jobs across {total_combinations} search(es). Switch to the **Jobs** tab to view them.")
-            st.subheader("Top Results")
-            for i, (job, analysis) in enumerate(new_results[:10], 1):
+            st.subheader(f"All {len(new_results)} Results")
+            for i, (job, analysis) in enumerate(new_results, 1):
                 score = analysis.relevance_score
                 bar = int(score * 20)
                 with st.expander(
