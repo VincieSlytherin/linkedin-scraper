@@ -25,6 +25,11 @@ Thumbs.db
 
 # Job cache database
 job_cache.db
+*.db
+
+# Logs
+logs/
+nohup.out
 
 # Debug scripts
 debug_search.py

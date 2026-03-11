@@ -1,0 +1,38 @@
+# LinkedIn Job Search Scheduler Configuration
+# Edit this file to configure your automated job searches.
+# The scheduler reads this file on every run, so changes take effect immediately.
+
+searches:
+  # Job titles to search for (one per line)
+  titles:
+    - Senior AI Engineer
+    - ML Engineer
+    - Applied AI Engineer
+    - LLM Engineer
+
+  # Locations to search in (one per line)
+  # Use "United States" for a nationwide search
+  locations:
+    - San Francisco, CA
+    - New York, NY
+    - Seattle, WA
+    - Boston, MA
+
+preferences:
+  # Filter by company size (startup / small / medium / large / enterprise)
+  company_sizes:
+    # - startup
+    # - small
+    - medium
+    - large
+    - enterprise
+
+  # Minimum relevance score to include in email (0.0 – 1.0)
+  min_relevance_score: 0.55
+
+  # Max jobs to fetch per title × location combination
+  max_jobs_per_search: 30
+
+schedule:
+  # How often to run (in hours)
+  interval_hours: 1

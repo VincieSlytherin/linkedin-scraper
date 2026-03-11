@@ -82,6 +82,46 @@ You'll be prompted for:
 2. **Company size** (optional) — `startup`, `small`, `medium`, `large`, `enterprise`
 3. **Minimum relevance score** (optional) — 0.0–1.0, default 0.6
 
+### Scheduled background mode (recommended)
+
+Edit [search_config.yaml](search_config.yaml) to configure your target roles and locations:
+
+```yaml
+searches:
+  titles:
+    - Senior AI Engineer
+    - ML Engineer
+  locations:
+    - San Francisco, CA
+    - New York, NY
+
+preferences:
+  min_relevance_score: 0.65
+  max_jobs_per_search: 15
+
+schedule:
+  interval_hours: 1
+```
+
+Then start the scheduler in the background:
+
+```bash
+# Run in foreground (Ctrl+C to stop)
+python scheduler.py
+
+# Run in background, output to logs/scheduler.log
+nohup python scheduler.py &
+
+# Run once and exit (useful for cron)
+python scheduler.py --once
+
+# macOS cron: run every hour
+crontab -e
+# Add:  0 * * * * cd /path/to/linkedin-job-scaper && venv/bin/python scheduler.py --once
+```
+
+The scheduler runs the full pipeline on every tick — multi-title × multi-location cross-search, deduplication, Claude analysis, and email delivery. Only jobs never previously sent are emailed. Logs are written to `logs/scheduler.log`.
+
 ### Agent mode
 
 ```bash
@@ -132,6 +172,8 @@ Upload your resume from the **Resume** tab before running a job search — Claud
 ├── database.py          # SQLite cache (jobs, analyses, resumes, applications)
 ├── emailer.py           # Formats and sends HTML email via Gmail SMTP
 ├── resume_parser.py     # Resume parsing (PDF, DOCX, TXT, Typst)
+├── scheduler.py         # Background scheduler (runs pipeline every N hours)
+├── search_config.yaml   # Scheduler config: titles, locations, preferences
 ├── extract_cookies.py   # Helper to extract LinkedIn browser cookies
 ├── skills/              # Agent skill definitions (Markdown)
 │   ├── search_jobs.md
