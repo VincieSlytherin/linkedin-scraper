@@ -51,11 +51,11 @@ class _Session:
             model=self.config.claude_model,
             db=self.db,
         )
-        # Use resume-based profile if available
+        # Use parsed resume text if available
         resume = self.db.get_latest_resume()
-        if resume and resume.get("extracted_profile"):
-            self.analyzer.candidate_profile = resume["extracted_profile"]
-            logger.info("Loaded candidate profile from resume: %s", resume["filename"])
+        if resume and resume.get("raw_text"):
+            self.analyzer.candidate_profile = resume["raw_text"]
+            logger.info("Loaded parsed resume text for candidate context: %s", resume["filename"])
 
         self.scraper: LinkedInScraper | None = None
         self.raw_search_results: list[dict] = []
@@ -278,7 +278,7 @@ async def send_email_tool(args: dict) -> dict:
 async def get_profile_tool(args: dict) -> dict:
     sess = _get_session()
     resume = sess.db.get_latest_resume()
-    source = "resume" if (resume and resume.get("extracted_profile")) else "default"
+    source = "resume_parser" if (resume and resume.get("raw_text")) else "default"
     profile = sess.analyzer.candidate_profile
     return {"content": [{"type": "text", "text": json.dumps({
         "source": source,

@@ -3,15 +3,29 @@
 # The scheduler reads this file on every run, so changes take effect immediately.
 
 searches:
-  # Job titles to search for (one per line)
-  titles:
-    - Senior AI Engineer
-    - ML Engineer
-    - Applied AI Engineer
-    - LLM Engineer
+  # ── Tier 1 (best match): Applied AI / GenAI roles ──────────────────────────
+  # Focus: LLM applications, RAG, agent systems, enterprise AI
+  # Target companies: Databricks, Anthropic, Stripe, Snowflake, AI infra startups
+  #
+  # ── Tier 2 (good match): Applied ML Engineering ─────────────────────────────
+  # Focus: ML systems, feature pipelines, model deployment (avoid training-heavy)
+  # Target companies: Snowflake, Databricks, Stripe, Adobe, Salesforce,
+  #                   Atlassian, Notion, Figma, Canva
+  #
+  # ── NOT targeting ───────────────────────────────────────────────────────────
+  # AI Research Scientist, Staff AI Engineer, Principal AI Engineer,
+  # foundation model teams (OpenAI training, Anthropic research, DeepMind)
 
-  # Locations to search in (one per line)
-  # Use "United States" for a nationwide search
+  titles:
+    # Tier 1 — highest fit
+    - Applied AI Engineer
+    - GenAI Engineer
+    - AI Engineer
+    # Tier 2 — also strong
+    - Machine Learning Engineer
+    # Tier 1 variant — some companies use "Senior" for mid-level applied roles
+    - Senior AI Engineer
+
   locations:
     - San Francisco, CA
     - New York, NY
@@ -19,10 +33,8 @@ searches:
     - Boston, MA
 
 preferences:
-  # Filter by company size (startup / small / medium / large / enterprise)
+  # Mid-to-large tech product companies (see tier notes above)
   company_sizes:
-    # - startup
-    # - small
     - medium
     - large
     - enterprise
@@ -31,8 +43,8 @@ preferences:
   min_relevance_score: 0.55
 
   # Max jobs to fetch per title × location combination
-  max_jobs_per_search: 30
+  max_jobs_per_search: 20
 
 schedule:
   # How often to run (in hours)
-  interval_hours: 1
+  interval_hours: 5

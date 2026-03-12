@@ -86,22 +86,14 @@ def print_summary(results: list[tuple]) -> None:
 
 
 def _load_resume_profile(db: JobDatabase, analyzer: JobAnalyzer, logger: logging.Logger) -> None:
-    """If a resume is stored in DB without an extracted profile, generate it now."""
+    """Load parsed resume text into the analyzer when a resume is available."""
     resume = db.get_latest_resume()
     if resume is None:
         logger.info("No resume found in database. Using default candidate profile.")
         logger.info("  → Upload your resume via the dashboard: streamlit run dashboard.py")
         return
-    if resume["extracted_profile"]:
-        analyzer.candidate_profile = resume["extracted_profile"]
-        logger.info("Loaded candidate profile from resume: %s", resume["filename"])
-        return
-    # Profile not yet extracted — generate it now
-    logger.info("Extracting profile from resume '%s' with Claude...", resume["filename"])
-    profile = analyzer.extract_profile_from_resume(resume["raw_text"])
-    db.update_resume_profile(resume["id"], profile)
-    analyzer.candidate_profile = profile
-    logger.info("Profile extracted and cached.")
+    analyzer.candidate_profile = resume["raw_text"]
+    logger.info("Loaded parsed resume text for candidate context: %s", resume["filename"])
 
 
 def main() -> None:

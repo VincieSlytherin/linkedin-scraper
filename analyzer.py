@@ -122,9 +122,26 @@ SEARCH_TOOL = {
 }
 
 SEARCH_SYSTEM_PROMPT = """\
-You are a LinkedIn job search expert. Given a natural language description of \
-the kind of job a person is looking for, extract structured search parameters \
-for the LinkedIn Jobs API.
+You are a LinkedIn job search expert. Build structured search parameters for the \
+LinkedIn Jobs API using two inputs:
+1. Resume text returned by the resume parser
+2. The user's current job search request
+
+Treat the parsed resume text as the source of truth for the candidate's background, level, \
+constraints, and strongest role fit. Use the user's request to narrow or prioritize the \
+search, not to overwrite resume facts unless the user explicitly states they want to target \
+a stretch or pivot role.
+
+Resume text from resume parser:
+{candidate_resume_text}
+
+Reasoning process:
+- First, analyze the candidate's market positioning ("市场定位") from the resume text: likely seniority, \
+core role family, strongest technical moat, domain positioning, and obvious constraints.
+- Then, use that market positioning to decide what search keywords and filters best match the \
+candidate's realistic target roles.
+- Do this reasoning internally. Do not output the reasoning. Only call the tool with the final \
+search parameters.
 
 Rules:
 - keywords: Keep it SIMPLE. Use 2-5 plain words for the core role. \
@@ -132,16 +149,22 @@ Do NOT use boolean operators (AND/OR/NOT) or parentheses — LinkedIn's API \
 works best with simple keyword phrases. \
 Good: "Generative AI Engineer", "Senior Python Developer", "ML Engineer". \
 Bad: "(AI OR ML) AND (Senior OR Lead)".
-- location_name: Extract location. If none specified, use "United States".
-- remote: Only include if user mentions remote/hybrid/on-site preference.
+- keywords should reflect roles the candidate is actually qualified for based on the \
+parsed resume text, while still honoring the user's request.
+- location_name: Extract location from the user's request. If none specified, use \
+"United States". If the resume text contains location constraints and the user \
+does not override them, respect those constraints.
+- remote: Only include if the user mentions remote/hybrid/on-site preference or the \
+resume text contains a clear work-mode constraint relevant to the search.
 - experience: Map seniority to codes. "Senior"=["4"], "Lead/Principal"=["4","5"], \
-"Junior/Entry"=["2"]. If no seniority mentioned, omit this field.
+"Junior/Entry"=["2"]. Use the candidate's actual level from the resume text to avoid \
+under- or over-leveling the search.
 - job_type: Only include if user mentions full-time, part-time, contract, etc.
 - listed_at: Default to 2592000 (30 days) unless user specifies recency.
 
 Call the create_linkedin_search tool with your extracted parameters."""
 
-CANDIDATE_PROFILE = """\
+DEFAULT_CANDIDATE_CONTEXT = """\
 ## Candidate Background
 
 **Role**: AI Engineer (2+ years production experience)
@@ -191,16 +214,28 @@ B.S. Data Science, Duke Kunshan University (GPA 3.86)
 ANALYSIS_SYSTEM_PROMPT = """\
 You are a precise job matching analyst evaluating roles for a specific candidate.
 
-{candidate_profile}
+The resume text below came directly from the resume parser and is the source of truth for the \
+candidate's background. Use it as the primary basis for scoring. Infer cautiously and do not \
+invent experience that is not supported by the resume.
 
-The candidate is currently looking for: "{query}"
+Resume text from resume parser:
+{candidate_resume_text}
+
+Current search request: "{query}"
 Preferred company sizes: {sizes}
+
+Reasoning process:
+- Step 1: Analyze the candidate's market positioning ("市场定位") from the resume text before looking \
+at the jobs. Identify their likely level, strongest role category, differentiating strengths, \
+domain fit, and major constraints.
+- Step 2: Evaluate each job against that market positioning, not just against raw keyword overlap.
+- Step 3: Produce the final JSON only. Keep the chain-of-thought private and do not output it.
 
 Analyze each job listing and return a JSON array. For each job:
 - job_id: string
-- relevance_score: float 0.0–1.0 — score based on the candidate's ACTUAL background above, \
-not just keyword overlap. A role requiring skills the candidate clearly has should score high \
-even if the job description uses different terminology.
+- relevance_score: float 0.0–1.0 — score based on the candidate's ACTUAL background in the \
+resume text above, not just keyword overlap. A role requiring skills the candidate clearly has \
+should score high even if the job description uses different terminology.
 - relevance_explanation: string — 1-2 sentences explaining the match quality against this \
 specific candidate's background
 - skills_match: list[string] — candidate's skills that directly match job requirements
@@ -209,6 +244,17 @@ demonstrably lacks — be conservative, do not list skills the candidate likely 
 - pros: list[string] — concrete reasons this role suits this candidate
 - cons: list[string] — genuine concerns (visa requirements, seniority mismatch, domain mismatch, etc.)
 - recommendation: one of "strong_match", "good_match", "weak_match", "no_match"
+
+Evaluation rules:
+- Use the parsed resume text as primary evidence and the current search request as a \
+secondary preference signal.
+- Judge fit relative to the candidate's market positioning, not just whether the job mentions \
+similar technologies.
+- Penalize jobs that conflict with explicit constraints stated or strongly implied in the resume.
+- Reward jobs that align with the candidate's demonstrated production scope, seniority, domains, \
+and toolchain.
+- Do not reward a job just because it contains AI/ML buzzwords if the actual responsibilities \
+do not fit the candidate's resume.
 
 Scoring guide:
   0.9–1.0  Role maps directly onto candidate's core expertise (RAG, agentic, LLM eng, multimodal)
@@ -237,8 +283,17 @@ class JobAnalyzer:
         self.client = Anthropic(api_key=api_key)
         self.model = model
         self._db = db
-        # Use provided resume-based profile, fall back to hardcoded one
-        self.candidate_profile = candidate_profile or CANDIDATE_PROFILE
+        # Prefer parsed resume text; use the default context only when no resume exists.
+        self.candidate_resume_text = candidate_profile or DEFAULT_CANDIDATE_CONTEXT
+
+    @property
+    def candidate_profile(self) -> str:
+        """Backward-compatible alias for parsed resume text used by the analyzer."""
+        return self.candidate_resume_text
+
+    @candidate_profile.setter
+    def candidate_profile(self, value: str) -> None:
+        self.candidate_resume_text = value
 
     # -- resume profile extraction --------------------------------------
 
@@ -281,7 +336,9 @@ class JobAnalyzer:
         response = self.client.messages.create(
             model=self.model,
             max_tokens=1024,
-            system=SEARCH_SYSTEM_PROMPT,
+            system=SEARCH_SYSTEM_PROMPT.format(
+                candidate_resume_text=self.candidate_resume_text,
+            ),
             tools=[SEARCH_TOOL],
             tool_choice={"type": "tool", "name": "create_linkedin_search"},
             messages=[{"role": "user", "content": user_input}],
@@ -296,9 +353,12 @@ class JobAnalyzer:
             model=self.model,
             max_tokens=1024,
             system=(
-                "Extract LinkedIn job search parameters from the user's description. "
+                "Extract LinkedIn job search parameters from the user's description, using "
+                "the parsed resume text as the primary background context.\n\n"
+                f"Resume text from resume parser:\n{self.candidate_resume_text}\n\n"
                 "Return a JSON object with keys: keywords, location_name, and optionally "
-                "remote, experience, job_type, listed_at. Return ONLY valid JSON."
+                "remote, experience, job_type, listed_at. Keep keywords simple and aligned "
+                "with roles the candidate is genuinely qualified for. Return ONLY valid JSON."
             ),
             messages=[{"role": "user", "content": user_input}],
         )
@@ -414,7 +474,7 @@ class JobAnalyzer:
             })
 
         system = ANALYSIS_SYSTEM_PROMPT.format(
-            candidate_profile=self.candidate_profile,
+            candidate_resume_text=self.candidate_resume_text,
             query=preferences.natural_language_query,
             sizes=", ".join(preferences.preferred_company_sizes),
         )

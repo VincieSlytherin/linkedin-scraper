@@ -136,8 +136,8 @@ with tab_search:
             st.write("Loading candidate profile...")
             analyzer = JobAnalyzer(api_key=cfg.anthropic_api_key, model=cfg.claude_model, db=db)
             resume = db.get_latest_resume()
-            if resume and resume.get("extracted_profile"):
-                analyzer.candidate_profile = resume["extracted_profile"]
+            if resume and resume.get("raw_text"):
+                analyzer.candidate_profile = resume["raw_text"]
 
             # Step 2 — Authenticate with LinkedIn
             st.write("Authenticating with LinkedIn...")
@@ -555,5 +555,4 @@ with tab_stats:
     timeline = df_all.groupby("sent_date").size().reset_index(name="jobs")
     if len(timeline) > 0:
         st.line_chart(timeline.set_index("sent_date")["jobs"])
-
 

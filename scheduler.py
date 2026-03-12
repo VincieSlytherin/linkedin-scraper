@@ -96,16 +96,16 @@ def run_pipeline() -> None:
     db = JobDatabase(db_path=DEFAULT_DB_PATH)
     db.cleanup_expired()
 
-    # Load candidate profile from resume if available
+    # Load parsed resume text if available
     analyzer = JobAnalyzer(
         api_key=cfg.anthropic_api_key,
         model=cfg.claude_model,
         db=db,
     )
     resume = db.get_latest_resume()
-    if resume and resume.get("extracted_profile"):
-        analyzer.candidate_profile = resume["extracted_profile"]
-        logger.info("Loaded candidate profile from resume: %s", resume["filename"])
+    if resume and resume.get("raw_text"):
+        analyzer.candidate_profile = resume["raw_text"]
+        logger.info("Loaded parsed resume text for candidate context: %s", resume["filename"])
 
     # Authenticate with LinkedIn
     logger.info("Authenticating with LinkedIn...")
