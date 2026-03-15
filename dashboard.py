@@ -233,7 +233,7 @@ with tab_search:
             st.subheader(f"All {len(new_results)} Results")
             for i, (job, analysis) in enumerate(new_results, 1):
                 score = analysis.relevance_score
-                bar = int(score * 20)
+                bar = int(score * 20) if score == score else 0  # guard NaN
                 with st.expander(
                     f"**{i}. {job.title}** @ {job.company.name}  ·  {score:.0%}  ·  {job.location}",
                     expanded=(i <= 3),
@@ -329,7 +329,7 @@ with tab_jobs:
 
             with left:
                 # Score bar
-                bar = int(score * 20)
+                bar = int(score * 20) if score == score else 0  # guard NaN
                 st.markdown(
                     f"`[{'█' * bar}{'░' * (20 - bar)}]` **{score:.0%}** · {rec.replace('_', ' ').title()}"
                 )
