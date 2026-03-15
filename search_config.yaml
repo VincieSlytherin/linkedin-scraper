@@ -18,8 +18,8 @@ searches:
 
   titles:
     # Tier 1 — highest fit
-    - Applied AI Engineer
-    - GenAI Engineer
+    # - Applied AI Engineer
+    # - GenAI Engineer
     - AI Engineer
     # Tier 2 — also strong
     - Machine Learning Engineer

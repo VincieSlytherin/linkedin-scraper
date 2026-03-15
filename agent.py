@@ -235,9 +235,8 @@ async def send_email_tool(args: dict) -> dict:
             "error": "No analysis results in session. Call analyze_jobs first."
         })}]}
 
-    max_jobs = int(args.get("max_jobs", sess.config.max_jobs_to_email))
     search_query = args.get("search_query", "job search")
-    top = sess.analysis_results[:max_jobs]
+    top = sess.analysis_results
 
     emailer = EmailSender(
         gmail_address=sess.config.gmail_address,

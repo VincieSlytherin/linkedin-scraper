@@ -192,8 +192,7 @@ def run_pipeline() -> None:
         return
 
     # Send email
-    max_email = cfg.max_jobs_to_email
-    to_send = new_results[:max_email]
+    to_send = new_results
     search_summary = ", ".join(titles[:3])
     if len(titles) > 3:
         search_summary += f" +{len(titles) - 3} more"
