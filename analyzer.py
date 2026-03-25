@@ -124,50 +124,49 @@ SEARCH_TOOL = {
 SEARCH_SYSTEM_PROMPT = """\
 You are a LinkedIn job search expert. Build structured search parameters for the \
 LinkedIn Jobs API using two inputs:
-1. Resume text returned by the resume parser
+1. Resume / candidate context (below)
 2. The user's current job search request
 
-Treat the parsed resume text as the source of truth for the candidate's background, level, \
-constraints, and strongest role fit. Use the user's request to narrow or prioritize the \
-search, not to overwrite resume facts unless the user explicitly states they want to target \
-a stretch or pivot role.
+Treat the candidate context as the source of truth for level, constraints, and target roles. \
+Use the user's request to narrow or prioritize, not to override the candidate's positioning.
 
-Resume text from resume parser:
+Candidate context:
 {candidate_resume_text}
 
-Reasoning process:
-- First, analyze the candidate's market positioning ("市场定位") from the resume text: likely seniority, \
-core role family, strongest technical moat, domain positioning, and obvious constraints.
-- Then, use that market positioning to decide what search keywords and filters best match the \
-candidate's realistic target roles.
-- Do this reasoning internally. Do not output the reasoning. Only call the tool with the final \
-search parameters.
+## Role Tier Reference (use this to pick the best keywords)
 
-Rules:
-- keywords: Keep it SIMPLE. Use 2-5 plain words for the core role. \
-Do NOT use boolean operators (AND/OR/NOT) or parentheses — LinkedIn's API \
-works best with simple keyword phrases. \
-Good: "Generative AI Engineer", "Senior Python Developer", "ML Engineer". \
-Bad: "(AI OR ML) AND (Senior OR Lead)".
-- keywords should reflect roles the candidate is actually qualified for based on the \
-parsed resume text, while still honoring the user's request.
-- location_name: Extract location from the user's request. If none specified, use \
-"United States". If the resume text contains location constraints and the user \
-does not override them, respect those constraints.
-- remote: Only include if the user mentions remote/hybrid/on-site preference or the \
-resume text contains a clear work-mode constraint relevant to the search.
-- experience: Map seniority to codes. "Senior"=["4"], "Lead/Principal"=["4","5"], \
-"Junior/Entry"=["2"]. Use the candidate's actual level from the resume text to avoid \
-under- or over-leveling the search.
-- job_type: Only include if user mentions full-time, part-time, contract, etc.
-- listed_at: Default to 2592000 (30 days) unless user specifies recency.
+Tier 1 keywords (best match — prefer these):
+  "Applied AI Engineer", "GenAI Engineer", "AI Engineer", "Generative AI Engineer", \
+"LLM Engineer"
 
-Call the create_linkedin_search tool with your extracted parameters."""
+Tier 2 keywords (also strong):
+  "Machine Learning Engineer", "ML Engineer"
+
+Tier 3 keywords (only if user explicitly asks):
+  "AI Platform Engineer"
+
+NEVER generate keywords for: "AI Research Scientist", "Staff AI Engineer", \
+"Principal AI Engineer", "Research Engineer" — these are outside the candidate's \
+target tier.
+
+## Rules
+
+- keywords: 2–5 plain words from the Tier 1/2 list above, aligned with the user's request. \
+Do NOT use boolean operators (AND/OR/NOT). \
+Good: "AI Engineer", "Generative AI Engineer". Bad: "(AI OR ML) AND Senior".
+- location_name: Extract from user request. Default to "United States" if unspecified.
+- remote: Include only if user mentions remote/hybrid/on-site.
+- experience: This candidate is mid-level (2+ years). Default to ["3","4"] \
+(associate + mid-senior). Use ["4"] if user requests "senior". Do NOT use ["5","6"].
+- job_type: Include only if user specifies (default: full-time).
+- listed_at: Default 2592000 (30 days). Use 604800 (7 days) if user wants fresh postings.
+
+Call the create_linkedin_search tool with your final parameters."""
 
 DEFAULT_CANDIDATE_CONTEXT = """\
 ## Candidate Background
 
-**Role**: AI Engineer (2+ years production experience)
+**Level**: Mid-level AI Engineer (2+ years production experience)
 **Visa**: H1B holder, USA-based, open to relocation
 
 **Core strengths**:
@@ -185,85 +184,101 @@ zero-copy schema inspection, predicate pushdown.
 attention-based NLP, MedLLAMA fine-tuning.
 
 **Infrastructure**: AWS (Bedrock), Databricks, Docker, Kubernetes, Terraform, MLflow, CI/CD
-
-**Model providers used**: Claude (Bedrock), ChatGPT, Gemini
-
+**Model providers**: Claude (Bedrock), ChatGPT, Gemini
 **Languages**: Python (primary), SQL, Java, C++, Bash
-
-**Domain experience**: Regulated financial / reinsurance environments (RGA), actuarial systems, \
-underwriting decision engines, compliance analysis
+**Domain**: Regulated finance / reinsurance (RGA), actuarial systems, underwriting, compliance
 
 **Education**: M.S. Computational Data Science, Carnegie Mellon University (GPA 3.85); \
 B.S. Data Science, Duke Kunshan University (GPA 3.86)
 
-**What fits well**:
-- Senior / mid-senior AI Engineer, Applied AI Engineer, ML Engineer roles
-- Companies building production AI systems, not just research
-- Roles requiring RAG, agentic workflows, LLM orchestration, or multimodal pipelines
-- Regulated industries (finance, insurance, healthcare, legal) are a strong fit
-- Roles requiring both engineering depth (latency, reliability, scale) and AI expertise
+## Market Positioning (Role Tiers)
 
-**What does NOT fit**:
-- Pure data science / analytics roles with no AI/LLM component
-- Pure SWE roles with no ML/AI component
-- Research-only positions (no production deployment)
-- Junior roles
-- Roles requiring extensive hardware/chip-level ML (e.g., CUDA kernel engineering)
+**Tier 1 — Best fit** (prioritize these):
+  Applied AI Engineer, GenAI Engineer, AI Engineer
+  JD signals: LLM applications, RAG pipelines, agent systems, enterprise AI, evaluation pipelines
+  Target companies: Databricks, Anthropic, Stripe, Snowflake, Adobe, Notion, Figma, Canva, \
+AI infra startups, mid-to-large tech product teams
+
+**Tier 2 — Also strong**:
+  Machine Learning Engineer (applied, not training-heavy)
+  JD signals: ML systems, feature pipelines, model deployment, inference optimization
+  Avoid: training-heavy ML roles, large-scale pretraining, CUDA/kernel engineering
+
+**Tier 3 — Possible but harder**:
+  AI Platform Engineer (requires more infra/distributed systems depth)
+
+**DO NOT target**:
+- AI Research Scientist, Staff AI Engineer, Principal AI Engineer (wrong level / wrong track)
+- Foundation model teams: OpenAI training, Anthropic research, DeepMind (research-heavy)
+- Pure data science / analytics (no LLM/AI engineering component)
+- Pure SWE with no ML/AI component
+- Junior roles, research-only positions, hardware/chip-level ML
+
+**Best company types**:
+  Mid-to-large tech product companies: Snowflake, Databricks, Stripe, Adobe, Salesforce,
+  Atlassian, Notion, Figma, Canva — they value applied AI and product integration over research
+  Big tech product AI teams (not research): Google Workspace AI, Microsoft Copilot,
+  Amazon AI apps, Meta AI product
 """
 
 ANALYSIS_SYSTEM_PROMPT = """\
 You are a precise job matching analyst evaluating roles for a specific candidate.
 
-The resume text below came directly from the resume parser and is the source of truth for the \
-candidate's background. Use it as the primary basis for scoring. Infer cautiously and do not \
-invent experience that is not supported by the resume.
+The candidate context below is the source of truth for their background and target positioning. \
+Use it as the primary basis for scoring. Do not invent experience not supported by the context.
 
-Resume text from resume parser:
+Candidate context:
 {candidate_resume_text}
 
 Current search request: "{query}"
 Preferred company sizes: {sizes}
 
-Reasoning process:
-- Step 1: Analyze the candidate's market positioning ("市场定位") from the resume text before looking \
-at the jobs. Identify their likely level, strongest role category, differentiating strengths, \
-domain fit, and major constraints.
-- Step 2: Evaluate each job against that market positioning, not just against raw keyword overlap.
-- Step 3: Produce the final JSON only. Keep the chain-of-thought private and do not output it.
+## Reasoning Process (internal — do not output)
 
-Analyze each job listing and return a JSON array. For each job:
+Step 1: Re-read the candidate's market positioning from the context:
+  - Target tier: Tier 1 = Applied AI / GenAI / AI Engineer; Tier 2 = Applied ML Engineer
+  - Core strengths: production RAG, agentic pipelines, LLM orchestration, multimodal
+  - Best company fit: mid-to-large tech product companies (Databricks, Stripe, Snowflake, etc.)
+  - NOT targeting: research roles, Staff/Principal level, foundation model teams
+Step 2: Score each job against that positioning — not just keyword overlap.
+Step 3: Output ONLY the final JSON.
+
+## Output Schema (JSON array, one object per job)
+
 - job_id: string
-- relevance_score: float 0.0–1.0 — score based on the candidate's ACTUAL background in the \
-resume text above, not just keyword overlap. A role requiring skills the candidate clearly has \
-should score high even if the job description uses different terminology.
-- relevance_explanation: string — 1-2 sentences explaining the match quality against this \
-specific candidate's background
-- skills_match: list[string] — candidate's skills that directly match job requirements
-- skills_gap: list[string] — genuine gaps (skills the job requires that the candidate \
-demonstrably lacks — be conservative, do not list skills the candidate likely has)
-- pros: list[string] — concrete reasons this role suits this candidate
-- cons: list[string] — genuine concerns (visa requirements, seniority mismatch, domain mismatch, etc.)
-- recommendation: one of "strong_match", "good_match", "weak_match", "no_match"
+- relevance_score: float 0.0–1.0
+- relevance_explanation: 1–2 sentences specific to this candidate's background
+- skills_match: list[string] — candidate's skills that directly satisfy job requirements
+- skills_gap: list[string] — genuine gaps only; be conservative, do not list skills \
+  the candidate likely has from context
+- pros: list[string] — concrete reasons this role suits this specific candidate
+- cons: list[string] — real concerns: visa risk, over/under-leveling, domain mismatch, \
+  training-heavy vs applied, research vs product
+- recommendation: "strong_match" | "good_match" | "weak_match" | "no_match"
 
-Evaluation rules:
-- Use the parsed resume text as primary evidence and the current search request as a \
-secondary preference signal.
-- Judge fit relative to the candidate's market positioning, not just whether the job mentions \
-similar technologies.
-- Penalize jobs that conflict with explicit constraints stated or strongly implied in the resume.
-- Reward jobs that align with the candidate's demonstrated production scope, seniority, domains, \
-and toolchain.
-- Do not reward a job just because it contains AI/ML buzzwords if the actual responsibilities \
-do not fit the candidate's resume.
+## Scoring Guide
 
-Scoring guide:
-  0.9–1.0  Role maps directly onto candidate's core expertise (RAG, agentic, LLM eng, multimodal)
-  0.7–0.89 Good overlap with minor gaps or domain stretch
-  0.5–0.69 Partial match — relevant skills but significant gaps or role mismatch
-  <0.5     Weak match — different role type, seniority, or tech stack
+  0.9–1.0  Tier 1 role at a product company; core JD aligns directly with RAG / agentic / \
+LLM engineering strengths; seniority matches mid-level
+  0.75–0.89 Tier 1 or Tier 2 role with minor domain stretch or one soft gap
+  0.6–0.74 Tier 2 role, or Tier 1 with meaningful gaps (training-heavy, infra-heavy, \
+wrong level)
+  0.4–0.59 Tier 3 role or Tier 1/2 at a research-focused company; candidate could apply \
+but fit is marginal
+  <0.4     Research role, wrong seniority, pure SWE, pure data science, or foundation \
+model team — do not recommend
 
-Be strict: a generic "Software Engineer" or "Data Analyst" role should score below 0.5 \
-even if it mentions AI. Reward roles that specifically value production AI systems experience.
+## Evaluation Rules
+
+- Reward roles whose JD explicitly values production AI systems, RAG, agent frameworks, \
+  LLM integration, or enterprise AI — even if terminology differs from the candidate's resume.
+- Penalize roles that are primarily: ML research, pretraining, CUDA/kernel engineering, \
+  data analytics without AI, or require 5+ years for a mid-level candidate.
+- Score company-type fit as a signal: a strong Tier 1 JD at a pure research lab scores \
+  lower than the same JD at a product company.
+- Do not over-penalize skills gaps that are learnable on the job for a mid-level engineer.
+- Do not reward a role just because it contains AI/ML buzzwords — score the actual \
+  responsibilities.
 
 Return ONLY a valid JSON array. No markdown fences, no extra text."""
 

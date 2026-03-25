@@ -23,8 +23,10 @@ searches:
     - AI Engineer
     # Tier 2 — also strong
     - Machine Learning Engineer
-    # Tier 1 variant — some companies use "Senior" for mid-level applied roles
-    - Senior AI Engineer
+    - llm engineer
+    - generative ai engineer
+    - AI system engineer
+
 
   locations:
     - San Francisco, CA
@@ -35,7 +37,7 @@ searches:
 preferences:
   # Mid-to-large tech product companies (see tier notes above)
   company_sizes:
-    - medium
+    # - medium
     - large
     - enterprise
 
