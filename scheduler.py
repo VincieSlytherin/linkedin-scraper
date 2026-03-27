@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
+from anthropic import APIStatusError
 
 from analyzer import JobAnalyzer, UserPreferences
 from config import load_config
@@ -163,18 +164,35 @@ def run_pipeline() -> None:
         db.close()
         return
 
-    # Analyze with Claude
+    # Analyze with Claude (retry on 529 overload)
     logger.info("Analyzing jobs with Claude (min_score=%.2f)...", min_score)
     prefs = UserPreferences(
         natural_language_query=titles[0],
         preferred_company_sizes=company_sizes,
         min_relevance_score=min_score,
     )
-    try:
-        results = analyzer.analyze_jobs(jobs, prefs)
-        logger.info("%d jobs passed the relevance filter.", len(results))
-    except Exception as exc:
-        logger.error("Analysis failed: %s", exc)
+    results = None
+    _overload_waits = [60, 120, 240]  # seconds between retries
+    for _attempt, _wait in enumerate([0] + _overload_waits, start=1):
+        if _wait:
+            logger.warning("Anthropic API overloaded — waiting %ds before retry %d/4...", _wait, _attempt)
+            time.sleep(_wait)
+        try:
+            results = analyzer.analyze_jobs(jobs, prefs)
+            logger.info("%d jobs passed the relevance filter.", len(results))
+            break
+        except APIStatusError as exc:
+            if exc.status_code == 529 and _attempt <= len(_overload_waits):
+                continue
+            logger.error("Analysis failed: %s", exc)
+            db.close()
+            return
+        except Exception as exc:
+            logger.error("Analysis failed: %s", exc)
+            db.close()
+            return
+    if results is None:
+        logger.error("Analysis failed after 4 attempts (persistent 529). Skipping this run.")
         db.close()
         return
 
